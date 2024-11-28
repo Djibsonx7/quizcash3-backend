@@ -7,55 +7,59 @@ const setupSocket = (server) => {
     cors: { origin: '*' },
   });
 
-  const rooms = {};
-
   io.on('connection', (socket) => {
-    console.log('Nouveau joueur connecté :', socket.id);
+    console.log('Nouvelle connexion :', socket.id);
 
     // Rejoindre une salle
-    socket.on('joinRoom', async ({ sessionId }) => {
+    socket.on('joinRoom', async ({ sessionId, userId, username }) => {
       try {
         const session = await Session.findById(sessionId);
         if (!session) {
           return socket.emit('error', { message: 'Session introuvable.' });
         }
 
+        // Vérifier si le joueur est déjà présent
+        const existingPlayer = session.players.find((player) => player.userId.toString() === userId);
+        if (!existingPlayer) {
+          session.players.push({ userId, username, score: 0 });
+          await session.save();
+        }
+
         // Ajouter le joueur à la salle Socket.IO
         socket.join(sessionId);
-        rooms[sessionId] = rooms[sessionId] || [];
-        rooms[sessionId].push(socket.id);
 
-        // Récupérer les joueurs connectés
+        // Envoyer la mise à jour des joueurs
         const players = session.players.map((player) => ({
           username: player.username,
           userId: player.userId,
         }));
-
-        // Envoyer les joueurs mis à jour à tous les joueurs de la session
         io.to(sessionId).emit('updatePlayers', players);
-
-        // Démarrer la session si 2 joueurs sont connectés
-        if (players.length === 2) {
-          io.to(sessionId).emit('session_started');
-
-          // Envoyer les questions au démarrage
-          const questions = await Question.find().limit(10); // Exemple : récupérer 10 questions
-          io.to(sessionId).emit('receiveQuestions', questions);
-        }
       } catch (error) {
         console.error('Erreur lors de la connexion à la salle :', error.message);
+      }
+    });
+
+    // Démarrage de la session
+    socket.on('startSession', async ({ sessionId }) => {
+      try {
+        const session = await Session.findById(sessionId);
+        if (!session) {
+          return socket.emit('error', { message: 'Session introuvable.' });
+        }
+
+        // Envoyer les questions et démarrer la session
+        const questions = await Question.find().limit(10);
+        io.to(sessionId).emit('receiveQuestions', questions);
+        io.to(sessionId).emit('session_started');
+        console.log(`Session ${sessionId} démarrée`);
+      } catch (error) {
+        console.error('Erreur lors du démarrage de la session :', error.message);
       }
     });
 
     // Gestion de la déconnexion
     socket.on('disconnect', () => {
       console.log('Joueur déconnecté :', socket.id);
-      for (const roomId in rooms) {
-        rooms[roomId] = rooms[roomId].filter((id) => id !== socket.id);
-        if (rooms[roomId].length === 0) {
-          delete rooms[roomId];
-        }
-      }
     });
   });
 };
